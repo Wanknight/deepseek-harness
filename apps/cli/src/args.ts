@@ -25,6 +25,8 @@ interface ProfileInvocation {
   fromDefaultProfile?: string | undefined
   /** Extra patch-list overlays applied after the profile's own layer, in argv order. */
   patches: string[]
+  /** Existing directories to register as workspaces after the tree boots, in argv order. */
+  workspaces: string[]
   /** Everything after the launcher's own flags, verbatim, for injected app plugins. */
   args: string[]
 }
@@ -63,6 +65,7 @@ export type DshInvocation = ProfileInvocation | DumpConfigInvocation | DumpConfi
 /** Launcher flags for profile boot and configuration dumps. */
 interface BootOptions {
   patch?: string[]
+  workspace?: string[]
   dumpConfig?: boolean
   dumpDefaultConfig?: boolean
   dumpConfigSchema?: boolean
@@ -112,9 +115,11 @@ function resolveBoot(program: Command, profile: string, options: BootOptions, ar
   const patches = options.patch ?? []
   if (patches.includes('')) program.error('error: --patch needs a path')
   if (options.fromDefaultProfile === '') program.error('error: --from-default-profile needs a name')
+  const workspaces = options.workspace ?? []
+  if (workspaces.includes('')) program.error('error: --workspace needs a path')
   const dumps = [options.dumpConfig, options.dumpDefaultConfig, options.dumpConfigSchema].filter(Boolean)
   if (dumps.length === 0) {
-    return { mode: 'profile', profile, fromDefaultProfile: options.fromDefaultProfile, patches, args }
+    return { mode: 'profile', profile, fromDefaultProfile: options.fromDefaultProfile, patches, workspaces, args }
   }
   if (dumps.length > 1) {
     program.error('error: --dump-config, --dump-default-config, and --dump-config-schema are mutually exclusive')
@@ -131,6 +136,10 @@ function resolveBoot(program: Command, profile: string, options: BootOptions, ar
   const defaultOnly = options.dumpDefaultConfig === true
   if (defaultOnly && patches.length > 0) {
     program.error('error: --dump-default-config prints the bundle layers and takes no --patch')
+  }
+  // A dump boots nothing, so no workspace registration can run.
+  if (workspaces.length > 0) {
+    program.error('error: config dumps boot nothing and take no --workspace')
   }
   return { mode: 'dump-config', profile, fromDefaultProfile: options.fromDefaultProfile, defaultOnly, patches }
 }
@@ -168,6 +177,7 @@ export function parseDshArgs(argv: readonly string[], version: string, manageDes
     .option('--profile <name>', 'the profile under $DSH_HOME/profiles to boot', selectProfile)
     .option('--from-default-profile <name>', 'replace a custom profile with a fresh copy of a shipped profile template')
     .option('--patch <path>', 'extra patch-list overlay applied after the profile layer (repeatable)', collect)
+    .option('--workspace <path>', 'existing directory to register as a workspace after boot (repeatable)', collect)
     .option('--dump-config', 'print the composed profile tree and exit')
     .option('--dump-config-schema', 'print JSON Schema for profile entries and patches without mounting')
     .option('--dump-default-config', 'print the profile tree without its user layer or --patch overlays and exit')

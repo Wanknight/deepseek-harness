@@ -22,38 +22,43 @@ afterEach(() => { vi.restoreAllMocks() })
 
 describe('parseDshArgs', () => {
   it('routes profile boots and shorthand, handing the rest to the app', () => {
-    expect(parse(['--profile', 'tui'])).toEqual({ mode: 'profile', profile: 'tui', patches: [], args: [] })
+    expect(parse(['--profile', 'tui'])).toEqual({ mode: 'profile', profile: 'tui', patches: [], workspaces: [], args: [] })
     expect(parse(['--profile', 'tui', '--patch', 'a.yml', '--patch', 'b.yml']))
-      .toEqual({ mode: 'profile', profile: 'tui', patches: ['a.yml', 'b.yml'], args: [] })
+      .toEqual({ mode: 'profile', profile: 'tui', patches: ['a.yml', 'b.yml'], workspaces: [], args: [] })
     expect(parse(['--profile', 'rescue', '--from-default-profile', 'web']))
-      .toEqual({ mode: 'profile', profile: 'rescue', fromDefaultProfile: 'web', patches: [], args: [] })
-    expect(parse(['web'])).toEqual({ mode: 'profile', profile: 'web', patches: [], args: [] })
+      .toEqual({ mode: 'profile', profile: 'rescue', fromDefaultProfile: 'web', patches: [], workspaces: [], args: [] })
+    expect(parse(['web'])).toEqual({ mode: 'profile', profile: 'web', patches: [], workspaces: [], args: [] })
     expect(parse(['web', '--patch', 'web.yml']))
-      .toEqual({ mode: 'profile', profile: 'web', patches: ['web.yml'], args: [] })
+      .toEqual({ mode: 'profile', profile: 'web', patches: ['web.yml'], workspaces: [], args: [] })
+    expect(parse(['web', '--workspace', 'E:/a', '--workspace', 'E:/b']))
+      .toEqual({ mode: 'profile', profile: 'web', patches: [], workspaces: ['E:/a', 'E:/b'], args: [] })
+    expect(parse(['--profile', 'web', '--workspace', 'E:/a', '--patch', 'x.yml']))
+      .toEqual({ mode: 'profile', profile: 'web', patches: ['x.yml'], workspaces: ['E:/a'], args: [] })
   })
 
   it('ends the launcher flags at the first token it does not own', () => {
     // App flags, including its -h, and positionals reach the app verbatim.
     expect(parse(['--profile', 'tui', '--resume', 'abc']))
-      .toEqual({ mode: 'profile', profile: 'tui', patches: [], args: ['--resume', 'abc'] })
+      .toEqual({ mode: 'profile', profile: 'tui', patches: [], workspaces: [], args: ['--resume', 'abc'] })
     expect(parse(['--profile', 'web', '-h']))
-      .toEqual({ mode: 'profile', profile: 'web', patches: [], args: ['-h'] })
+      .toEqual({ mode: 'profile', profile: 'web', patches: [], workspaces: [], args: ['-h'] })
     expect(parse(['web', '--host', '127.0.0.1', '--port', '8080', '--no-open', '--future-web-flag']))
-      .toEqual({ mode: 'profile', profile: 'web', patches: [], args: ['--host', '127.0.0.1', '--port', '8080', '--no-open', '--future-web-flag'] })
+      .toEqual({ mode: 'profile', profile: 'web', patches: [], workspaces: [], args: ['--host', '127.0.0.1', '--port', '8080', '--no-open', '--future-web-flag'] })
     expect(parse(['--profile', 'headless', 'run', 'the', 'tests']))
-      .toEqual({ mode: 'profile', profile: 'headless', patches: [], args: ['run', 'the', 'tests'] })
+      .toEqual({ mode: 'profile', profile: 'headless', patches: [], workspaces: [], args: ['run', 'the', 'tests'] })
     // Launcher flags placed after that boundary belong to the app too.
     expect(parse(['--profile', 'tui', '--patch', 'a.yml', '--resume', 'b', '--patch', 'late.yml']))
-      .toEqual({ mode: 'profile', profile: 'tui', patches: ['a.yml'], args: ['--resume', 'b', '--patch', 'late.yml'] })
+      .toEqual({ mode: 'profile', profile: 'tui', patches: ['a.yml'], workspaces: [], args: ['--resume', 'b', '--patch', 'late.yml'] })
     expect(parse(['--profile', 'rescue', '--resume', 'abc', '--from-default-profile', 'web']))
       .toEqual({
         mode: 'profile',
         profile: 'rescue',
         patches: [],
+        workspaces: [],
         args: ['--resume', 'abc', '--from-default-profile', 'web'],
       })
     expect(parse(['web', '--from-default-profile', 'web']))
-      .toEqual({ mode: 'profile', profile: 'web', fromDefaultProfile: 'web', patches: [], args: [] })
+      .toEqual({ mode: 'profile', profile: 'web', fromDefaultProfile: 'web', patches: [], workspaces: [], args: [] })
   })
 
   it.each(['web', 'headless', 'sdk', 'sdk-minimal', 'acp', 'tui', 'custom', 'run', 'help'])('expands %s without looking up profiles', (profile) => {
@@ -222,9 +227,14 @@ describe('parseDshArgs', () => {
     expect(exitCode(['--profile', 'x', '--from-default-profile='])).toBe(1)
     expect(exitCode(['--profile', 'x', '--from-default-profile'])).toBe(1)
     expect(exitCode(['--profile', 'x', '--patch='])).toBe(1)
+    expect(exitCode(['--profile', 'x', '--workspace='])).toBe(1)
+    expect(exitCode(['web', '--workspace='])).toBe(1)
     expect(exitCode(['--dump-config'])).toBe(1)
     expect(exitCode(['--profile', 'x', '--dump-config', '--dump-default-config'])).toBe(1)
     expect(exitCode(['--profile', 'x', '--dump-default-config', '--patch', 'p.yml'])).toBe(1)
+    // A dump boots nothing, so a runtime workspace registration is meaningless.
+    expect(exitCode(['--profile', 'x', '--dump-config', '--workspace', 'E:/a'])).toBe(1)
+    expect(exitCode(['web', '--dump-config', '--workspace', 'E:/a'])).toBe(1)
     expect(exitCode(['--profile', 'x', '--dump-config', 'task'])).toBe(1)
     expect(exitCode(['--bogus'])).toBe(1)
     expect(exitCode(['web', '--dump-config', '--dump-default-config'])).toBe(1)

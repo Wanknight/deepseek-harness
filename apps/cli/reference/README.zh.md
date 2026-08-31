@@ -33,6 +33,8 @@ dsh rescue
 
 启动器的 flag 必须写在应用参数之前，且启动器的解析器会消耗掉一个 `--`：必须以字面量 `--` 送达应用的参数需要写成 `-- --`。`plugin` 仅在紧跟 `dsh` 时选择插件管理命令；选定 profile 后，`plugin` 和 `web` 都是普通应用参数。应用参数开始之前，重复指定 `--profile` 会被拒绝，包括简写后再指定 `--profile` 的情况。`ctx.cmdlineArgs.get()` 是共享的不可变读取：多个插件可以解析同一份快照，没有读取方的 profile 则会忽略自己的应用参数。
 
+可重复的 `--workspace <path>` 是一个启动器 flag，在配置树完成挂载后执行：每个指定的已存在目录都会通过 workspace 注册表按规范路径幂等的 create，以 argv 顺序注册到已启动组合的 workspace 注册表，不会打开 workspace，也不会启动会话。不挂载 workspace 注册表的组合在 flag 指定路径时会在启动时显式报错，因为用户请求的注册没有任何配置行能够执行；配置 dump 出于同样原因拒绝该 flag——dump 不启动任何东西。
+
 随附的应用接受以下命令行参数：
 
 | Profile | 参数 |

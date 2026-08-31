@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-29-workspace-boot-flag.md
+2026-08-29-workspace-boot-flag.md: b38d881d33df98368a8d852b0462a1f3fba52d83
+2026-08-29-workspace-boot-flag.zh.md: f24403f7fa3736d75facac2a7ba4709768377c35
