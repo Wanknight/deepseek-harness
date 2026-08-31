@@ -20,6 +20,8 @@ A composition mounts once. An ordinary plugin injects `cmdlineArgs`, parses this
 
 Launcher flags must come before app arguments, and the launcher's parser consumes one `--`: an app argument that must arrive as a literal `--` needs `-- --`. A first app argument equal to `web` or `plugin` selects that subcommand instead. `ctx.cmdlineArgs.get()` is a shared immutable read: multiple plugins may parse the same snapshot, while a profile with no reader ignores its app arguments.
 
+Repeatable `--workspace <path>` is a launcher flag that runs after the tree finishes mounting: each named existing directory is registered in the booted composition's workspace registry through its idempotent per-canonical-path create, in argv order, without opening the workspace or starting a session. A composition that mounts no workspace registry fails loud at boot when the flag names one, because the user requested a registration no tree row can perform; config dumps reject the flag for the same reason — they boot nothing.
+
 The shipped apps own these command lines:
 
 | Profile | Arguments |

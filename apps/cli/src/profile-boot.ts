@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
+import type {} from '@deepseek-ai/dsh-workspace'
 import {
   boot,
   composeEntries,
@@ -103,6 +104,26 @@ export function resolveTelemetryPatch(disabledEnv: string | undefined, hasRow: b
 }
 
 /**
+ * Register every `--workspace <path>` directory in the booted tree's workspace
+ * registry. Runs after the tree finishes mounting, when `workspaceRegistry` is
+ * provided; `create` is idempotent per canonical path, so repeated boots
+ * reuse the existing workspace. A composition without the registry is a
+ * misconfiguration the user named on the command line: it fails loud instead
+ * of silently skipping the requested registration.
+ * @param ctx - the booted root context.
+ * @param paths - `--workspace` paths, in argv order.
+ * @returns settlement after every registration settles.
+ */
+export async function registerBootWorkspaces(ctx: Context, paths: readonly string[]): Promise<void> {
+  if (paths.length === 0) return
+  const registry = ctx.get('workspaceRegistry')
+  if (registry === undefined) {
+    throw new Error('dsh: --workspace requires a composition that provides workspaceRegistry (the web profile does; add @deepseek-ai/dsh-workspace to this profile or drop the flag)')
+  }
+  for (const path of paths) await registry.create(path)
+}
+
+/**
  * Load a resolved profile for `name` and (re)write the empty root config. The
  * root is always rewritten: the whole composition is patch layers, and the
  * vendored Loader's tree write-back (a plugin self-disposing persists the
@@ -180,6 +201,8 @@ export interface RunProfileOptions {
   profile: string
   /** `--patch` overlay paths, in argv order. */
   patchFiles: readonly string[]
+  /** `--workspace` directory paths registered after the tree boots, in argv order. */
+  workspacePaths: readonly string[]
   /** The invocation's inner arguments, handed to the tree through `ctx.cmdlineArgs`. */
   args: readonly string[]
 }
@@ -301,6 +324,11 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
   if (!signalShutdown.signal.aborted
     && ctx.fiber.state === FiberState.ACTIVE
     && ctx.get('loader') !== undefined) {
+    try {
+      await registerBootWorkspaces(ctx, options.workspacePaths)
+    } catch (error) {
+      suppressShutdownError(ctx, signalShutdown.signal, error)
+    }
     appReady.commit()
   }
   return { ctx, shutdown }

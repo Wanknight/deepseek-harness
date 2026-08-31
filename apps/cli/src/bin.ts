@@ -30,6 +30,7 @@ switch (invocation.mode) {
       environment: loadLayeredEnv('dsh'),
       profile: invocation.profile,
       patchFiles: invocation.patches,
+      workspacePaths: invocation.workspaces,
       args: invocation.args,
     })
     break

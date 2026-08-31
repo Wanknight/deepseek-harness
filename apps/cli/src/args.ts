@@ -23,6 +23,8 @@ interface ProfileInvocation {
   profile: string
   /** Extra patch-list overlays applied after the profile's own layer, in argv order. */
   patches: string[]
+  /** Existing directories to register as workspaces after the tree boots, in argv order. */
+  workspaces: string[]
   /** Everything after the launcher's own flags, verbatim, for injected app plugins. */
   args: string[]
 }
@@ -50,6 +52,7 @@ export type DshInvocation = ProfileInvocation | DumpConfigInvocation | PluginInv
 /** Launcher flags shared by the default command and the `web` alias. */
 interface BootOptions {
   patch?: string[]
+  workspace?: string[]
   dumpConfig?: boolean
   dumpDefaultConfig?: boolean
 }
@@ -83,8 +86,10 @@ Examples:
 function resolveBoot(program: Command, profile: string, options: BootOptions, args: string[]): DshInvocation {
   const patches = options.patch ?? []
   if (patches.includes('')) program.error('error: --patch needs a path')
+  const workspaces = options.workspace ?? []
+  if (workspaces.includes('')) program.error('error: --workspace needs a path')
   if (options.dumpConfig !== true && options.dumpDefaultConfig !== true) {
-    return { mode: 'profile', profile, patches, args }
+    return { mode: 'profile', profile, patches, workspaces, args }
   }
   if (options.dumpConfig === true && options.dumpDefaultConfig === true) {
     program.error('error: --dump-config and --dump-default-config are mutually exclusive')
@@ -98,6 +103,10 @@ function resolveBoot(program: Command, profile: string, options: BootOptions, ar
   const defaultOnly = options.dumpDefaultConfig === true
   if (defaultOnly && patches.length > 0) {
     program.error('error: --dump-default-config prints the bundle layers and takes no --patch')
+  }
+  // A dump boots nothing, so no workspace registration can run.
+  if (workspaces.length > 0) {
+    program.error('error: config dumps boot nothing and take no --workspace')
   }
   return { mode: 'dump-config', profile, defaultOnly, patches }
 }
@@ -130,6 +139,7 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
     .argument('[args...]', 'arguments for the booted profile\'s app (see: dsh --profile <name> --help)')
     .option('--profile <name>', 'the profile under $DSH_HOME/profiles to boot')
     .option('--patch <path>', 'extra patch-list overlay applied after the profile layer (repeatable)', collect)
+    .option('--workspace <path>', 'existing directory to register as a workspace after boot (repeatable)', collect)
     .option('--dump-config', 'print the composed profile tree and exit')
     .option('--dump-default-config', 'print the profile tree without its user layer or --patch overlays and exit')
     .action((args: string[], options: BootOptions & { profile?: string }) => {
@@ -147,9 +157,9 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
   /** Reject parent options supplied before a subcommand. */
   const rejectParentOptions = (command: string): void => {
     const parent = program.opts<BootOptions & { profile?: string }>()
-    if (parent.profile !== undefined || parent.patch !== undefined
+    if (parent.profile !== undefined || parent.patch !== undefined || parent.workspace !== undefined
       || parent.dumpConfig !== undefined || parent.dumpDefaultConfig !== undefined) {
-      program.error(`error: ${command} takes none of parent --profile, --patch, --dump-config, or --dump-default-config`)
+      program.error(`error: ${command} takes none of parent --profile, --patch, --workspace, --dump-config, or --dump-default-config`)
     }
   }
 
@@ -161,6 +171,7 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
     .enablePositionalOptions()
     .argument('[args...]', 'arguments for the web app (see: dsh web --help)')
     .option('--patch <path>', 'extra patch-list overlay applied after the profile layer (repeatable)', collect)
+    .option('--workspace <path>', 'existing directory to register as a workspace after boot (repeatable)', collect)
     .option('--dump-config', 'print the composed web-profile tree (with the user layer and any --patch) and exit')
     .option('--dump-default-config', 'print the web profile\'s bundle layers (no user layer) and exit')
     .action((args: string[], options: BootOptions) => {
