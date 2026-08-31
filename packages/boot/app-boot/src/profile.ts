@@ -615,8 +615,11 @@ export function readProfileManifest(binName: string, dir: string): ProfileManife
   } catch (error) {
     throw new Error(`${binName}: failed to read profile manifest ${path}: ${String(error)}`)
   }
+  // A leading UTF-8 BOM is Windows-editor padding, not data (Notepad and
+  // friends still emit it for .json files); JSON.parse rejects it outright.
+  const bomless = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
   // The field checks below validate the file data before trusting the parse type.
-  const parsed = JSON.parse(raw) as ProfileManifest | null
+  const parsed = JSON.parse(bomless) as ProfileManifest | null
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(`${binName}: profile manifest ${path} must hold a JSON object`)
   }

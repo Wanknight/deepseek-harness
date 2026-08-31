@@ -144,3 +144,37 @@ describe('agent/request-error', () => {
     })
   })
 })
+
+describe('stream preflight failures close their turn', () => {
+  it('closes the turn with the error after a stream() UNSUPPORTED_CONTENT throw — no orphan half-turn', async () => {
+    // Provider preflight throws (e.g. DeepSeek adapter's UNSUPPORTED_CONTENT
+    // when the model rejects image input) AFTER user/message and step/start
+    // were appended. The turn must still receive turn/end with the structured
+    // failure — the community health audit's "orphan half-turn" claim.
+    const adapter = new MockAdapter([fail('DeepSeek model "m" does not accept image input.', 'UNSUPPORTED_CONTENT')])
+    const ctx = await harness(adapter)
+    const agent = await ctx.agentLoop.create(SessionId('stream-preflight-orphan'), { provider: 'mock', model: 'm' })
+    let turnCount = 0
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    try {
+      await agent.whenIdle()
+    } catch {
+      // The turn error rethrows to the driver; the assertion below owns the
+      // durable-log contract.
+    }
+
+    const types = agent.session.snapshotEvents().map(event => event.type)
+    for (const type of types) {
+      if (type === 'turn/start') turnCount += 1
+      if (type === 'turn/end') turnCount -= 1
+    }
+    expect(turnCount).toBe(0)
+    const lastEnd = [...agent.session.snapshotEvents()].reverse().find(event => event.type === 'turn/end')
+    expect(lastEnd && lastEnd.type === 'turn/end' && lastEnd.data.reason.kind).toBe('error')
+    expect(
+      lastEnd && lastEnd.type === 'turn/end' && lastEnd.data.reason.kind === 'error'
+      && 'error' in lastEnd.data.reason ? lastEnd.data.reason.error.code : undefined,
+    ).toBe('UNSUPPORTED_CONTENT')
+  })
+})

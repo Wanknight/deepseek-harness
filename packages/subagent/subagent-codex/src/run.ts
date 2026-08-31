@@ -41,16 +41,29 @@ interface CodexPackageManifest {
   }
 }
 
-const codexPackageJsonPath = createRequire(import.meta.url).resolve('@openai/codex/package.json')
-const codexPackageManifest = JSON.parse(
-  readFileSync(codexPackageJsonPath, 'utf8'),
-) as CodexPackageManifest
-
-/** Absolute package-local JavaScript wrapper selected by the package manifest. */
-const CODEX_PACKAGE_BIN = resolve(
-  dirname(codexPackageJsonPath),
-  codexPackageManifest.bin.codex,
-)
+/**
+ * Resolve the package-local app-server wrapper of one Codex install.
+ * Resolution runs per call, not at module load: a damaged or pruned
+ * `@openai/codex` install then fails at first use with one actionable
+ * sentence instead of taking every importer down with a bare resolution
+ * stack.
+ * @param packageName - the Codex package to resolve (default `@openai/codex`;
+ *   tests probe a nonexistent name).
+ * @returns the absolute JavaScript wrapper selected by the package manifest.
+ */
+function codexPackageBin(packageName = '@openai/codex'): string {
+  let packageJsonPath: string
+  try {
+    packageJsonPath = createRequire(import.meta.url).resolve(`${packageName}/package.json`)
+  } catch (error) {
+    throw new Error(
+      `subagent-codex: ${packageName} is not resolvable from this installation (install @openai/codex into the profile, e.g. dsh plugin --profile <name> add @deepseek-ai/dsh-subagent-codex, or reinstall the package): ${String(error)}`,
+      { cause: error },
+    )
+  }
+  const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as CodexPackageManifest
+  return resolve(dirname(packageJsonPath), manifest.bin.codex)
+}
 
 /** Profile-selectable non-interactive Codex permission mode. */
 export type CodexPermissionMode =
@@ -130,10 +143,12 @@ export function codexStartupFailure(cause: unknown): Error {
 
 /**
  * Fixed package-local app-server command, independent of the host `PATH`.
+ * @param packageName - the Codex package to resolve (default `@openai/codex`;
+ *   tests probe a nonexistent name for the remediation path).
  * @returns Node, the official wrapper, and the fixed app-server arguments.
  */
-export function codexAppServerArgv(): string[] {
-  return [process.execPath, CODEX_PACKAGE_BIN, 'app-server', '--stdio']
+export function codexAppServerArgv(packageName?: string): string[] {
+  return [process.execPath, codexPackageBin(packageName), 'app-server', '--stdio']
 }
 
 /** Fully resolved inputs for one Codex app-server run. */

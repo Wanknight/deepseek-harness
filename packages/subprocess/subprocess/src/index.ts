@@ -61,12 +61,28 @@ export const SENSITIVE_ENV_PATTERN = /KEY|PASSWORD|SECRET|TOKEN/i
  *
  * When a proxy is active the result also carries the resolved proxy names and the flag a child Node
  * needs to honor them, so a child inherits the same routing as its parent.
+ * The credential-shape heuristic is a substring match, so non-credential
+ * names like `MY_SERVICE_KEY` or `AWS_ACCESS_KEY_ID` are dropped without any
+ * trace. `options.warn` receives each such dropped name — once per name per
+ * process, deduplicated across calls — so a spawner can surface what the
+ * child will NOT see; `DSH_*` removal is documented behavior and never
+ * reported. Values are never handed to the sink, only names.
+ * @param options - optional `warn` sink for dropped credential-shaped names.
  * @returns a fresh environment object safe to hand to a child spawn.
  */
-export function scrubbedParentEnv(): Record<string, string> {
+export function scrubbedParentEnv(options: { warn?: (name: string) => void } = {}): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && !SENSITIVE_ENV_PATTERN.test(key) && !key.toUpperCase().startsWith(DSH_ENV_PREFIX)) env[key] = value
+    if (value === undefined) continue
+    if (SENSITIVE_ENV_PATTERN.test(key)) {
+      if (options.warn !== undefined && !scrubWarned.has(key)) {
+        scrubWarned.add(key)
+        options.warn(key)
+      }
+      continue
+    }
+    if (key.toUpperCase().startsWith(DSH_ENV_PREFIX)) continue
+    env[key] = value
   }
   // A child Node ignores the inherited proxy variables unless the flag this adds is set, so an MCP
   // stdio server or subagent CLI would connect directly while its parent proxies. The same overlay
@@ -78,6 +94,9 @@ export function scrubbedParentEnv(): Record<string, string> {
   }
   return env
 }
+
+/** Names already reported through a warn sink this process (one notice per name). */
+const scrubWarned = new Set<string>()
 
 declare module '@deepseek-ai/cordis' {
   interface Context {

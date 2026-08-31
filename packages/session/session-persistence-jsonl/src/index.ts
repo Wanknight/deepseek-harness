@@ -125,6 +125,8 @@ interface FrozenStoredEvents extends SessionHandleReadResult {
 interface StoredLogBase extends FrozenStoredEvents {
   readonly meta: SessionHeader
   readonly tornTruncateTo: number | undefined
+  /** Total file bytes when the torn marker was taken; a different length at truncate time is a concurrent writer. */
+  readonly tornSnapshotBytes: number | undefined
   /** Complete events recovered from the torn final frame; the write path rewrites them durably. */
   readonly recoveredTail: SessionEvent[]
   /** Exact fork-inherited prefix length stored in the header line. */
@@ -439,6 +441,7 @@ class JsonlSessionPersistence extends SessionPersistence {
         cursor: stored.events.length,
         materialized: true,
         tornTruncateTo: stored.tornTruncateTo,
+        tornSnapshotBytes: stored.tornSnapshotBytes,
         recoveredTail: stored.recoveredTail,
         inheritedEventCount: stored.inheritedEventCount,
         primed: stored,
@@ -732,6 +735,7 @@ class JsonlSessionPersistence extends SessionPersistence {
       meta,
       ...freezeStoredEvents(events),
       tornTruncateTo: undefined,
+      tornSnapshotBytes: undefined,
       recoveredTail: [],
       inheritedEventCount: SessionLogOffset(prepared.artifact.inheritedEventCount),
       revision: fileRevision(prepared.sourceIdentity),
@@ -758,6 +762,7 @@ class JsonlSessionPersistence extends SessionPersistence {
       eventState: stored.eventState,
       events: stored.events,
       tornTruncateTo: stored.tornTruncateTo,
+      tornSnapshotBytes: stored.tornSnapshotBytes,
       recoveredTail: stored.recoveredTail,
       inheritedEventCount: stored.inheritedEventCount,
       revision: fileRevision(identity),
@@ -822,6 +827,7 @@ class JsonlSessionPersistence extends SessionPersistence {
       inheritedEventCount: SessionLogOffsetType
       events: SessionEvent[]
       tornTruncateTo: number | undefined
+      tornSnapshotBytes: number | undefined
       recoveredTail: SessionEvent[]
     }
     try {
@@ -836,6 +842,7 @@ class JsonlSessionPersistence extends SessionPersistence {
           inheritedEventCount,
           events,
           tornTruncateTo: committedBytes < buffer.byteLength ? committedBytes : undefined,
+          tornSnapshotBytes: committedBytes < buffer.byteLength ? buffer.byteLength : undefined,
           // A torn raw tail is one incomplete JSONL line; it holds no complete
           // record to recover.
           recoveredTail: [],
@@ -936,10 +943,26 @@ class JsonlSessionPersistence extends SessionPersistence {
 
   /**
    * Truncate a torn physical tail durably before this session's first new append.
+   * The repair decision was made against one physical tail: any size change
+   * since the marker was taken — a concurrent writer appending complete lines
+   * past the torn bytes, or another process already committing the repair —
+   * makes the marker stale, and the truncate refuses rather than discarding
+   * another writer's committed bytes. This is the check-then-truncate window
+   * the sqlite sibling holds inside its begin-immediate transaction.
    * @param header - the session's stored header.
    * @param truncateTo - the byte offset the artifact is truncated to.
+   * @param snapshotBytes - total file bytes when the torn marker was taken; a different length refuses the repair.
    */
-  async truncateTornTail(header: SessionHeader, truncateTo: number): Promise<void> {
+  async truncateTornTail(header: SessionHeader, truncateTo: number, snapshotBytes?: number): Promise<void> {
+    if (snapshotBytes !== undefined) {
+      const path = logPath(this.root, header.cwd, header.id, this.compression)
+      const { size } = await stat(path, { bigint: true })
+      if (size !== BigInt(snapshotBytes)) {
+        throw new Error(
+          `session ${header.id} repair is stale: log is ${size} bytes, marker was taken at ${snapshotBytes}`,
+        )
+      }
+    }
     this.coldLogMemo.delete(header.id)
     await this.repair(header, truncateTo)
     this.ctx.logger.warn(`${this.name}: session "${header.id}" recovered from a torn tail; incomplete tail bytes were discarded`)
@@ -997,6 +1020,7 @@ class JsonlSessionPersistence extends SessionPersistence {
     inheritedEventCount: SessionLogOffsetType
     events: SessionEvent[]
     tornTruncateTo: number | undefined
+    tornSnapshotBytes: number | undefined
     recoveredTail: SessionEvent[]
   }> {
     signal?.throwIfAborted()
@@ -1039,6 +1063,7 @@ class JsonlSessionPersistence extends SessionPersistence {
           inheritedEventCount: prefix.inheritedEventCount,
           events: prefix.events,
           tornTruncateTo: undefined,
+          tornSnapshotBytes: undefined,
           recoveredTail: [],
         }
       }
@@ -1063,6 +1088,7 @@ class JsonlSessionPersistence extends SessionPersistence {
         inheritedEventCount: prefix.inheritedEventCount,
         events: prefix.events,
         tornTruncateTo: tornStart,
+        tornSnapshotBytes: buffer.byteLength,
         recoveredTail: prefix.events.slice(complete.eventCount),
       }
     } catch (error) {

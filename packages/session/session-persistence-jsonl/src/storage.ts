@@ -68,6 +68,8 @@ export interface StorageHandleState {
   materialized: boolean
   /** Torn-tail truncation point, consumed by the first new append. */
   tornTruncateTo?: number | undefined
+  /** Total file bytes when the torn marker was taken; a different length at truncate time is a concurrent writer. */
+  tornSnapshotBytes?: number | undefined
   /** Complete events recovered from the torn final frame; the first mutation rewrites them durably. */
   recoveredTail?: SessionEvent[] | undefined
   /** Exact fork-inherited prefix length stored with the log; `0` when unseeded. */
@@ -326,8 +328,9 @@ export class JsonlSessionHandle implements SessionHandle {
     // truncate the torn bytes, then durably rewrite the complete events
     // recovered from them (already counted in the primed cursor).
     if (this.state.tornTruncateTo !== undefined) {
-      await this.storage.truncateTornTail(this.header, this.state.tornTruncateTo)
+      await this.storage.truncateTornTail(this.header, this.state.tornTruncateTo, this.state.tornSnapshotBytes)
       this.state.tornTruncateTo = undefined
+      this.state.tornSnapshotBytes = undefined
     }
     if (this.state.recoveredTail !== undefined) {
       if (this.state.recoveredTail.length > 0) {

@@ -233,6 +233,15 @@ describe('manifest round-trip', () => {
     expect(() => readProfileManifest('t', dir)).toThrow('must hold a JSON object')
     expect(() => readProfileManifest('t', join(dir, 'nope'))).toThrow('failed to read profile manifest')
   })
+
+  it('reads a manifest saved with a UTF-8 BOM (Windows editors)', () => {
+    const dir = tmp()
+    writeProfileManifest(dir, { name: 'p', dsh: { profile: { bundles: ['a'] } } })
+    // A UTF-8 BOM before the opening brace is editor-added padding, not data;
+    // Windows Notepad and several editors still emit it for .json files.
+    writeFileSync(join(dir, 'package.json'), `﻿${JSON.stringify({ name: 'p', dsh: { profile: { bundles: ['a'] } } })}`)
+    expect(readProfileManifest('t', dir).dsh?.profile?.bundles).toEqual(['a'])
+  })
 })
 
 describe('resolveBundleDir', () => {

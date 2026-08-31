@@ -100,4 +100,29 @@ describe('SubprocessRuntime seam', () => {
       delete process.env.SCRUB_PROBE_PLAIN
     }
   })
+
+  it('scrubbedParentEnv reports each dropped credential-shaped name to the warn sink once, never DSH_ names', () => {
+    process.env.MY_SERVICE_KEY = 'k'
+    process.env.AWS_ACCESS_KEY_ID = 'k'
+    process.env.DSH_SCRUB_PROBE = 'stale'
+    const reported: string[] = []
+    try {
+      scrubbedParentEnv({ warn: (name) => { reported.push(name) } })
+      // Substring matches are the heuristic's known false positives — naming
+      // them makes a silently missing child variable diagnosable. Other
+      // machine-local credential-shaped names ride along; the probes must be
+      // reported and the documented DSH_* removal must stay silent.
+      expect(reported).toContain('MY_SERVICE_KEY')
+      expect(reported).toContain('AWS_ACCESS_KEY_ID')
+      expect(reported).not.toContain('DSH_SCRUB_PROBE')
+      // Every name already reported on the first call stays quiet on the next.
+      const again: string[] = []
+      scrubbedParentEnv({ warn: (name) => { again.push(name) } })
+      expect(again).toEqual([])
+    } finally {
+      delete process.env.MY_SERVICE_KEY
+      delete process.env.AWS_ACCESS_KEY_ID
+      delete process.env.DSH_SCRUB_PROBE
+    }
+  })
 })

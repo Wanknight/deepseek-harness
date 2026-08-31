@@ -2890,3 +2890,52 @@ describe('JsonlSessionPersistence listing concurrency', () => {
     await expect(listingCtx.sessionPersistence.list()).rejects.toBe(earlierSessionFailure)
   })
 })
+
+describe('JsonlSessionPersistence: torn-tail repair staleness guard', () => {
+  let ctx: Context
+  let root: string
+  beforeEach(async () => {
+    root = await freshRoot()
+    ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+  })
+  afterEach(async () => { await ctx.fiber.dispose() })
+
+  it('refuses to truncate when the physical tail grew after the torn marker was taken (stale repair)', async () => {
+    const m = meta('stale-moved', '/proj')
+    await writeLog(ctx.sessionPersistence, m, oneTurnLog())
+    const path = rawLogPath(root, '/proj', m.id)
+    // A torn tail the way the scanner reports it: partial line, no newline.
+    await appendFile(path, '{"type":"assistant/chunk","seq":8,"ti')
+    const { stat } = await import('node:fs/promises')
+    const tornAt = Number((await stat(path)).size)
+
+    // A second writer appends a COMPLETE line into the torn region before the
+    // repair runs: the physical tail no longer matches the marker, so the
+    // truncate must refuse rather than discard another writer's committed bytes.
+    await appendFile(path, '\n{"type":"turn/end","seq":9,"time":10,"data":{"turn":2,"reason":{"kind":"completed"}}}')
+
+    const backend = ctx.sessionPersistence as unknown as {
+      truncateTornTail(h: unknown, to: number, snap?: number): Promise<void>
+    }
+    await expect(backend.truncateTornTail(m, tornAt - 30, tornAt)).rejects.toThrow(/repair is stale/)
+  })
+
+  it('refuses a torn repair when the log already shrank (another writer repaired it)', async () => {
+    const m = meta('stale-done', '/proj')
+    await writeLog(ctx.sessionPersistence, m, oneTurnLog())
+    const path = rawLogPath(root, '/proj', m.id)
+    await appendFile(path, '{"type":"assistant/chunk","seq":8,"ti')
+    const { stat, truncate } = await import('node:fs/promises')
+    const tornAt = Number((await stat(path)).size)
+
+    // Another process committed the repair: the torn bytes are gone.
+    await truncate(path, tornAt - 30)
+
+    const backend = ctx.sessionPersistence as unknown as {
+      truncateTornTail(h: unknown, to: number, snap?: number): Promise<void>
+    }
+    await expect(backend.truncateTornTail(m, tornAt - 30, tornAt)).rejects.toThrow(/repair is stale/)
+  })
+})

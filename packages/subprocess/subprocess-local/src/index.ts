@@ -71,6 +71,12 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   private linuxDeepProbePassed = false
   /** Test hook for platform process inspection; production resolves lazily on terminal spawn. */
   terminalInspector: ProcessInspector | undefined
+  /**
+   * Names the credential-shape heuristic dropped from children so far: the
+   * scrub dedups per process, and one logger line per name keeps a missing
+   * child variable diagnosable without per-spawn noise.
+   */
+  private readonly scrubWarned = new Set<string>()
 
   constructor(ctx: Context) {
     super(ctx)
@@ -86,6 +92,20 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
 
   /** Spill failures reach the plugin logger; the log line is the only trace of why a result has no spill path. */
   private readonly reportSpillFailure = logSpillFailure(this.ctx.logger, 'subprocess-local')
+
+  /**
+   * The scrub's warn sink: each dropped ambient name is logged once per
+   * process (the runtime's own set mirrors the seam's dedup so a disposed and
+   * remounted runtime does not repeat lines already emitted).
+   * @param name - the dropped environment variable name (never its value).
+   */
+  private warnScrubbed(name: string): void {
+    if (this.scrubWarned.has(name)) return
+    this.scrubWarned.add(name)
+    this.ctx.logger('subprocess').warn(
+      `ambient environment variable ${JSON.stringify(name)} matches the credential-shape heuristic and is NOT forwarded to children; pass it explicitly in the spawn spec's env if the child needs it`,
+    )
+  }
 
   private terminateForHostExit(): void {
     for (const handle of this.live) {
@@ -144,7 +164,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   ): Promise<string> {
     if (command.length === 0) throw new Error('subprocess-local: executable must be non-empty')
     signal?.throwIfAborted()
-    const environment = childEnv(env)
+    const environment = childEnv(env, (name) => { this.warnScrubbed(name) })
     const absolute = isAbsolute(command)
     if (!absolute && (command.includes('/') || (process.platform === 'win32' && command.includes('\\')))) {
       throw new Error(
@@ -181,12 +201,12 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
 
   spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
     validateSubprocessSpec(spec)
-    const env = targetEnvironment(spec)
+    const env = targetEnvironment(spec, (name) => { this.warnScrubbed(name) })
     const containmentMode = this.selectContainmentMode('ordinary')
     let handle: LocalSubprocessHandle
     const internals: SpawnInternals = { ...this.internals, onSpillFailure: this.reportSpillFailure }
     if (containmentMode === 'fallback') {
-      handle = spawnSubprocess(spec, internals)
+      handle = spawnSubprocess(spec, { ...internals, warnScrubbed: (name) => { this.warnScrubbed(name) } })
     } else {
       const binding = prepareManagedProcessBinding(internals)
       const launch = containmentMode === 'linux-scope'
@@ -269,7 +289,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
     spec.signal?.throwIfAborted()
     const inspector = this.terminalInspector ?? createProcessInspector()
     const containmentMode = this.selectContainmentMode('terminal')
-    const env = targetEnvironment(spec)
+    const env = targetEnvironment(spec, (name) => { this.warnScrubbed(name) })
     const platform = this.internals.platform ?? process.platform
     const activity = prepareShellActivity(spec, env, platform)
     const launch = activity === undefined ? spec : { ...spec, argv: activity.argv, env: activity.env }
