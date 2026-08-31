@@ -434,6 +434,18 @@ export class SessionInputShell implements SessionInput {
   }
 
   /**
+   * Return keyboard focus to this session's composer (the popupSelect shell's
+   * selection and Escape-close paths). Lexical's `focus()` restores the editor
+   * selection without focusing the DOM root, so both calls run — the same
+   * pairing the unlock effect uses, minus the reveal (the caret is where the
+   * token left it, already on screen).
+   */
+  focusComposer(): void {
+    this.editor.getRootElement()?.focus({ preventScroll: true })
+    this.editor.focus()
+  }
+
+  /**
    * The live selection as a detect-coordinate span (menu-launcher synthetic
    * hits replace it on pick); an absent selection answers a collapsed span at
    * the document end.

@@ -444,3 +444,37 @@ describe('InputHub queue steering (empty-draft accelerated Enter)', () => {
     await b.runtime.dispose()
   })
 })
+
+describe('composer focus binding for the popupSelect shell', () => {
+  it('binds the session shell focus through commandUi.bindComposerFocus when the service is present', async () => {
+    const runtime = await SlotTestRuntime.create()
+    await runtime.sessions.add({ id: 's1', session: { prompt: vi.fn() } })
+    const bound: Array<[string, () => void]> = []
+    runtime.ctx.provide('commandUi', {
+      popupFor: vi.fn(),
+      bindComposerFocus: (id: string, focus: () => void) => {
+        bound.push([id, focus])
+        return () => {}
+      },
+    })
+    const hub = new InputHub(runtime.ctx, makeTranslate(zh, {}))
+    hub.shellFor(runtime.sessions.binding('s1')!)
+    expect(bound).toHaveLength(1)
+    expect(bound[0]![0]).toBe('s1')
+    // The bound callback reaches the shell's composer focus (Lexical focus in
+    // production; here the shell method itself, spied).
+    const shell = hub.shellFor(runtime.sessions.binding('s1')!)
+    const spy = vi.spyOn(shell, 'focusComposer')
+    bound[0]![1]()
+    expect(spy).toHaveBeenCalledOnce()
+    await runtime.dispose()
+  })
+
+  it('skips the binding without a commandUi service', async () => {
+    const runtime = await SlotTestRuntime.create()
+    await runtime.sessions.add({ id: 's1', session: { prompt: vi.fn() } })
+    const hub = new InputHub(runtime.ctx, makeTranslate(zh, {}))
+    expect(() => hub.shellFor(runtime.sessions.binding('s1')!)).not.toThrow()
+    await runtime.dispose()
+  })
+})

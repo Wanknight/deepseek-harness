@@ -159,6 +159,11 @@ export class ApprovalService extends Service {
     policy: z.union(['ask', 'never'] as const).default('ask'),
   })
 
+  /** Asks awaiting an answerer, keyed by their audit id (one entry per in-flight request). */
+  private readonly pending = new Map<string, (outcome: ApprovalOutcome) => void>()
+  /** The owning agent of each pending ask (setPolicy adjudicates per agent). */
+  private readonly pendingAgents = new Map<string, Agent>()
+
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'approval')
 
@@ -192,6 +197,19 @@ export class ApprovalService extends Service {
     const previous = this.effectivePolicy(agent.session)
     if (previous === policy) return
     setApprovalPolicy(agent.session, policy)
+    // A pending ask cannot outlive the policy that prompted it: under 'never'
+    // it settles 'rejected' (the same verdict an ask STARTING under 'never'
+    // receives), so the tool call resolves and the turn closes instead of
+    // waiting on an answerer the UI already dismissed. Returning to 'ask'
+    // leaves in-flight asks standing — their prompts stay actionable.
+    if (policy === 'never') {
+      for (const [id, settle] of this.pending) {
+        if (this.pendingAgents.get(id) !== agent) continue
+        this.pending.delete(id)
+        this.pendingAgents.delete(id)
+        settle('rejected')
+      }
+    }
     agent.inject(createUserMessage({
       content: [{
         type: 'text',
@@ -235,7 +253,7 @@ export class ApprovalService extends Service {
       ...req.callId !== undefined ? { callId: req.callId } : {},
       ...req.reason !== undefined ? { reason: req.reason } : {},
     })
-    const outcome = await this.decide(req, session)
+    const outcome = await this.decide(req, session, id)
     session.append('approval/decided', { id, outcome })
     return outcome
   }
@@ -264,9 +282,10 @@ export class ApprovalService extends Service {
    * Dispatch the waterfall, contained and raced against the request signal.
    * @param req - the borrowed public request.
    * @param session - the request agent's session used for policy lookup.
+   * @param id - the ask's audit id, registering it for setPolicy adjudication.
    * @returns the normalized closed outcome.
    */
-  private async decide(req: ApprovalRequest, session: Session): Promise<ApprovalOutcome> {
+  private async decide(req: ApprovalRequest, session: Session, id: ApprovalRequestId): Promise<ApprovalOutcome> {
     const signal = req.signal
     if (signal?.aborted) return 'cancelled'
     // The 'never' policy is decided HERE, before any dispatch: a listener
@@ -292,20 +311,48 @@ export class ApprovalService extends Service {
       // tool call open — the seam contains its callbacks.
       () => 'unavailable',
     )
-    if (signal === undefined) return answer
-    return await new Promise<ApprovalOutcome>((resolve) => {
-      const onAbort = () => {
-        signal.removeEventListener('abort', onAbort)
-        resolve('cancelled')
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      void answer.then((outcome) => {
-        signal.removeEventListener('abort', onAbort)
-        // After an abort won the race this resolve is a settled-promise no-op:
-        // the late answer is discarded by construction.
-        resolve(outcome)
+    let raced: ApprovalOutcome
+    if (signal === undefined) {
+      raced = await new Promise<ApprovalOutcome>((resolve) => { this.arm(id, req.agent, answer, resolve) })
+    } else {
+      raced = await new Promise<ApprovalOutcome>((resolve) => {
+        const onAbort = () => {
+          signal.removeEventListener('abort', onAbort)
+          this.settlePending(id, 'cancelled', resolve)
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        void answer.then((outcome) => {
+          signal.removeEventListener('abort', onAbort)
+          // After an abort won the race this settle is a settled-promise no-op:
+          // the late answer is discarded by construction.
+          this.settlePending(id, outcome, resolve)
+        })
       })
-    })
+    }
+    return raced
+  }
+
+  /** Register one ask's resolution and start the answerer race (setPolicy adjudication hook). */
+  private arm(
+    id: ApprovalRequestId,
+    agent: Agent,
+    answer: Promise<ApprovalOutcome>,
+    resolve: (outcome: ApprovalOutcome) => void,
+  ): void {
+    this.pending.set(id, (outcome) => { this.settlePending(id, outcome, resolve) })
+    this.pendingAgents.set(id, agent)
+    void answer.then((outcome) => { this.settlePending(id, outcome, resolve) })
+  }
+
+  /** Resolve one ask exactly once and drop its pending registration. */
+  private settlePending(
+    id: ApprovalRequestId,
+    outcome: ApprovalOutcome,
+    resolve: (outcome: ApprovalOutcome) => void,
+  ): void {
+    this.pending.delete(id)
+    this.pendingAgents.delete(id)
+    resolve(outcome)
   }
 }
 

@@ -25,6 +25,7 @@ function fakeAgent(seed: Array<{ type: string }> = [{ type: 'turn/start' }, { ty
         return { type, data } as unknown as SessionEvent
       },
     },
+    inject: () => {},
   } as unknown as Agent
   return { agent, appended }
 }
@@ -510,5 +511,40 @@ describe('approval policy (the approval/policy fold)', () => {
     expect(await contextFor()).toBeDefined()
     await fiber.dispose()
     expect(await contextFor()).toBeUndefined()
+  })
+})
+
+describe('setPolicy adjudicates in-flight asks', () => {
+  it("resolves a pending ask as rejected when the policy switches to 'never' mid-flight", async () => {
+    const ctx = await mounted()
+    const { agent, appended } = fakeAgent()
+    // Hold the answerer open: the user has the prompt on screen.
+    let answer: ((outcome: ApprovalOutcome) => void) | undefined
+    ctx.on('approval/request', () => new Promise<ApprovalOutcome>((resolve) => { answer = resolve }))
+    const pending = ctx.approval.request(requestOf(agent))
+    await vi.waitFor(() => { expect(answer).toBeDefined() })
+
+    ctx.approval.setPolicy(agent, 'never')
+
+    // The switch itself is visible in the session log before the audit pair.
+    await expect(pending).resolves.toBe('rejected')
+    expect(appended.at(-1)).toMatchObject({ type: 'approval/decided', data: { outcome: 'rejected' } })
+  })
+
+  it('leaves a pending ask untouched when the policy switches to the same value or back to ask', async () => {
+    const ctx = await mounted()
+    const { agent } = fakeAgent()
+    let answer: ((outcome: ApprovalOutcome) => void) | undefined
+    ctx.on('approval/request', () => new Promise<ApprovalOutcome>((resolve) => { answer = resolve }))
+    const pending = ctx.approval.request(requestOf(agent))
+    await vi.waitFor(() => { expect(answer).toBeDefined() })
+
+    // ask -> ask is a no-op switch; the ask stays pending on the answerer.
+    ctx.approval.setPolicy(agent, 'ask')
+    const settled = await Promise.race([pending.then(() => true), new Promise<boolean>((r) => { setTimeout(() => { r(false) }, 20) })])
+    expect(settled).toBe(false)
+
+    answer!('allowed-once')
+    await expect(pending).resolves.toBe('allowed-once')
   })
 })

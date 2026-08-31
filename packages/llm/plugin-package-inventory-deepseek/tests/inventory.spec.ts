@@ -158,15 +158,22 @@ describe('DeepSeek plugin package inventory', () => {
     ])
   })
 
-  it('fails when a Loader-resolved bare entry has no package manifest', async () => {
+  it('skips a Loader-resolved bare entry with no resolvable manifest instead of failing the request', async () => {
     const { ctx } = await harness()
     ctx.loader.internal = {
       version: 'v2',
       import: async () => ({ default: () => {} }),
     } as unknown as NonNullable<typeof ctx.loader.internal>
     await ctx.loader.create({ name: 'missing-package' })
-    await expect(ctx.deepseekLlmApiExtensions.prepare({ body: { messages: [] }, signal: SIGNAL }))
-      .rejects.toThrow(/cannot resolve active package/)
+    // A telemetry field must not take down the whole official route: an entry
+    // whose package cannot be resolved from any anchor (source-checkout layouts
+    // where workspace links live only in sibling node_modules) is omitted.
+    const prepared = await ctx.deepseekLlmApiExtensions.prepare({ body: { messages: [] }, signal: SIGNAL })
+    expect(prepared.fields.dsh_plugin_packages).toEqual({ version: 1, packages: [] })
+    // A second request over the same entry stays quiet — the warning is once
+    // per package per process, carried by the resolver's unresolved set.
+    const again = await ctx.deepseekLlmApiExtensions.prepare({ body: { messages: [] }, signal: SIGNAL })
+    expect(again.fields.dsh_plugin_packages).toEqual({ version: 1, packages: [] })
   })
 
   it('supports a direct embedding whose context has no base URL', async () => {

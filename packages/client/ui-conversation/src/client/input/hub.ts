@@ -22,9 +22,11 @@ import type { InputSubmitMode } from '../contract/composer-submission.ts'
 import type { PopupDismissFace } from './facade.ts'
 import { SessionInputShell } from './facade.ts'
 
-/** Structural command face for per-session popup resolution. */
+/** Structural command face for per-session popup resolution and composer focus. */
 interface CommandFace {
   popupFor(actx: Context): PopupDismissFace
+  /** Bind the popupSelect shell's focus-return callback (returns the unbind disposer). */
+  bindComposerFocus(id: SessionId, focus: () => void): () => void
 }
 
 /** Optional input-trigger service resolved without importing its implementation. */
@@ -106,6 +108,12 @@ export class InputHub implements SessionInputResolver {
       },
     })
     this.shells.set(id, shell)
+    // The popupSelect shell returns focus to this composer after a selection
+    // or Escape close; the commandUi service holds the per-session hook the
+    // popup controller calls. Unbinding rides the same scope effect below.
+    let unbindFocus: (() => void) | undefined
+    const command = this.rootCtx.get('commandUi') as CommandFace | undefined
+    if (command !== undefined) unbindFocus = command.bindComposerFocus(id, () => { shell.focusComposer() })
     // The one teardown axis: listeners, shell, and map entries all ride the
     // scope fiber (nothing here outlives the scope).
     actx.effect(() => {
@@ -121,6 +129,7 @@ export class InputHub implements SessionInputResolver {
       ]
       return () => {
         for (const off of offs) off()
+        unbindFocus?.()
         const drafts = shell.dispose()
         this.shells.delete(id)
         const conversation = this.rootCtx.get('conversation') as ConversationAttachmentFace | undefined

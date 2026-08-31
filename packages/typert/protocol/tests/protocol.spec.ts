@@ -130,6 +130,18 @@ describe('typert-protocol Remote declarations', () => {
     ])
   })
 
+  it('reads Remote markers written by another module copy of the protocol', () => {
+    // Discussion #5146: a source-checkout host and a profile-installed
+    // third-party package each load their own module instance of
+    // dsh-typert-protocol; markers written through one copy must stay
+    // readable through the other or the gateway claims no endpoints (HTTP 404).
+    const fixture = fileURLToPath(new URL('./fixtures/cross-copy-markers.ts', import.meta.url))
+    const output = execFileSync(process.execPath, ['--import', 'tsx/esm', fixture], { encoding: 'utf8' })
+    expect(JSON.parse(output)).toEqual([
+      { method: 'classifyAll', invocation: { kind: 'direct' } },
+    ])
+  })
+
   it('stores a non-enumerable versioned marker descriptor on the prototype', () => {
     class Goals {
       readonly typertRemote = bindTypertRemote(this, 'goals')

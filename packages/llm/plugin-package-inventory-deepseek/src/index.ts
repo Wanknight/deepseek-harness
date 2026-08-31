@@ -98,8 +98,12 @@ function nearestManifest(modulePath: string): string | undefined {
 class PackageIdentityResolver {
   // TODO: Invalidate manifest identities if in-process package-version replacement becomes a supported upgrade path.
   private readonly cache = new Map<string, DeepSeekPluginPackageIdentity | undefined>()
+  private readonly warnedUnresolved = new Set<string>()
 
-  constructor(private readonly hostBaseUrl: string) {}
+  constructor(
+    private readonly hostBaseUrl: string,
+    private readonly warn: (message: string) => void = () => {},
+  ) {}
 
   /** Resolve one Loader entry's owning package, or absence for a non-package loose module. */
   resolve({ entry, bareBaseUrl }: ActiveEntry): DeepSeekPluginPackageIdentity | undefined {
@@ -114,7 +118,17 @@ class PackageIdentityResolver {
     if (packageName !== undefined) {
       manifest = barePackageManifest(packageName, anchors)
       if (manifest === undefined) {
-        throw new Error(`plugin-package-inventory-deepseek: cannot resolve active package ${JSON.stringify(packageName)}`)
+        // Request preparation must not fail over one unresolvable inventory
+        // row: a source-checkout host loads entries through tsconfig paths
+        // while their workspace links live only in sibling node_modules, so no
+        // anchor search chain reaches the manifest. Omit the row and warn once
+        // per package per process (the cache also holds the absence).
+        if (!this.warnedUnresolved.has(packageName)) {
+          this.warnedUnresolved.add(packageName)
+          this.warn(`plugin-package-inventory-deepseek: cannot resolve active package ${JSON.stringify(packageName)} (skipping inventory entry)`)
+        }
+        this.cache.set(key, undefined)
+        return undefined
       }
     } else if (!entry.options.name.startsWith('cordis:')) {
       const moduleUrl = isAbsolute(entry.options.name)
@@ -186,7 +200,8 @@ async function collectActivePluginPackages(
 export function apply(ctx: Context, config: Config): void {
   if (config.enabled === false) return
   const hostBaseUrl = ctx.baseUrl ?? import.meta.url
-  const resolver = new PackageIdentityResolver(hostBaseUrl)
+  const logger = ctx.logger('plugin-package-inventory-deepseek')
+  const resolver = new PackageIdentityResolver(hostBaseUrl, (message) => { logger.warn(message) })
   ctx.deepseekLlmApiExtensions.register('dsh_plugin_packages', {
     prepare: async (request) => {
       const value: DeepSeekPluginPackageInventoryExtension = {
