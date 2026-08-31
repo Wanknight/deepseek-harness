@@ -32,10 +32,16 @@ import { linuxProcessGroupHasLiveMembers } from './process-inspector.ts'
  * deliberately restores or overrides an entry; an explicit `undefined`
  * tombstone removes an ordinary ambient entry.
  * @param extra - explicit caller entries and tombstones, merged after the scrub.
+ * @param warn - optional sink receiving each ambient name the credential-shape
+ * heuristic dropped (names only, once per name per process), so a caller can
+ * surface what the child will not see.
  * @returns the environment to hand to `spawn` for the child process.
  */
-export function childEnv(extra?: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
-  const env = scrubbedParentEnv()
+export function childEnv(
+  extra?: Readonly<NodeJS.ProcessEnv>,
+  warn?: (name: string) => void,
+): NodeJS.ProcessEnv {
+  const env = scrubbedParentEnv(warn === undefined ? {} : { warn })
   if (process.platform !== 'win32') return { ...env, ...extra }
   let entries: [string, string | undefined][] = Object.entries(env)
   for (const [key, value] of Object.entries(extra ?? {})) {
@@ -56,6 +62,8 @@ export interface SpawnInternals {
   platform?: NodeJS.Platform
   /** Linux process-group member probe (defaults to `/proc` inspection). */
   linuxProcessGroupHasLiveMembers?: (processGroupId: number) => boolean | undefined
+  /** Sink for ambient names the env scrub dropped (production wires the runtime's logger). */
+  warnScrubbed?: (name: string) => void
 }
 
 /**
@@ -346,7 +354,7 @@ export function spawnSubprocess(spec: SubprocessSpawnSpec, internals: SpawnInter
   const errMode = spec.stdio.stderr
   const stdinMode = spec.stdio.stdin
 
-  const env = childEnv(spec.env)
+  const env = childEnv(spec.env, internals.warnScrubbed)
   const child = spawn(program, args, {
     cwd: spec.cwd,
     env,

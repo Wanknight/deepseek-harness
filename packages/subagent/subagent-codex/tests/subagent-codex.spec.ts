@@ -416,6 +416,13 @@ describe('task admission and package contracts', () => {
     expect(JSON.stringify(rows)).not.toContain('tool-subagent')
   })
 
+  it('turns a missing @openai/codex install into a remediation error, not a module-load stack', () => {
+    // A damaged or pruned install must fail at first use with one actionable
+    // sentence, never at import time with a bare resolution stack.
+    expect(() => codexAppServerArgv('@openai/codex-missing-probe'))
+      .toThrow(/install @openai\/codex/)
+  })
+
   it('accepts one or more text blocks and rejects empty or non-text tasks', () => {
     expect(textTask([
       { type: 'text', text: 'one' },

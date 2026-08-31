@@ -88,6 +88,8 @@ export interface Config {
 interface JsonlTornMarker {
   truncateTo: number
   recoveredEvents: SessionEvent[]
+  /** Total file bytes when the marker was taken; a different length at commit time is a concurrent writer. */
+  snapshotBytes: number
 }
 
 interface FileRevisionIdentity {
@@ -335,7 +337,7 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
           meta,
           events,
           ...committedBytes < buffer.byteLength
-            ? { tornMarker: { truncateTo: committedBytes, recoveredEvents: [] } }
+            ? { tornMarker: { truncateTo: committedBytes, recoveredEvents: [], snapshotBytes: buffer.byteLength } }
             : {},
         }
       }
@@ -417,6 +419,7 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
         tornMarker: {
           truncateTo: tornStart,
           recoveredEvents: recoveredPrefix.events.slice(complete.eventCount),
+          snapshotBytes: buffer.byteLength,
         },
       }
     } catch (error) {
@@ -446,14 +449,34 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
   /**
    * Make a crash repair durable: truncate a torn tail, restore complete events
    * decoded from it, then append synthetic closers. Two fsync'd steps — the seam
-   * does not require this to be atomic.
+   * does not require this to be atomic — but the truncate refuses a stale
+   * marker: the log is re-scanned first, and a physical tail that no longer
+   * matches the marker (a concurrent writer appended into the torn region, or
+   * another process already committed the repair) rejects instead of
+   * discarding another writer's committed bytes.
    */
   async commitRepair(
     meta: SessionHeader,
     tornMarker: JsonlTornMarker | undefined,
     closers: readonly SessionEvent[],
   ): Promise<void> {
-    if (tornMarker !== undefined) await this.repair(meta, tornMarker.truncateTo)
+    if (tornMarker !== undefined) {
+      // The repair decision was made against one physical tail. Any growth
+      // since — a concurrent writer appending complete lines past the torn
+      // bytes — or shrinkage (another process already committed a repair)
+      // makes the marker stale: the truncate would discard bytes the other
+      // writer committed, so refuse and let the caller re-read. This is the
+      // check-then-truncate window the sqlite sibling holds inside its
+      // begin-immediate transaction.
+      const path = logPath(this.root, meta.cwd, meta.id, this.compression)
+      const { size } = await stat(path, { bigint: true })
+      if (size !== BigInt(tornMarker.snapshotBytes)) {
+        throw new Error(
+          `session ${meta.id} repair is stale: log is ${size} bytes, marker was taken at ${tornMarker.snapshotBytes}`,
+        )
+      }
+      await this.repair(meta, tornMarker.truncateTo)
+    }
     const repairedEvents = [...(tornMarker?.recoveredEvents ?? []), ...closers]
     if (repairedEvents.length > 0) await this.appendLines(meta, repairedEvents)
     if (tornMarker !== undefined) this.ctx.logger.warn(`${this.name}: session "${meta.id}" recovered from a torn tail; incomplete tail bytes were discarded`)

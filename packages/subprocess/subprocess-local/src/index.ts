@@ -43,6 +43,12 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   internals: SpawnInternals = {}
   /** Test hook for platform process inspection; production resolves lazily on terminal spawn. */
   terminalInspector: ProcessInspector | undefined
+  /**
+   * Names the credential-shape heuristic dropped from children so far: the
+   * scrub dedups per process, and one logger line per name keeps a missing
+   * child variable diagnosable without per-spawn noise.
+   */
+  private readonly scrubWarned = new Set<string>()
 
   constructor(ctx: Context) {
     super(ctx)
@@ -57,6 +63,20 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
         }
       }
     }, 'local subprocess teardown')
+  }
+
+  /**
+   * The scrub's warn sink: each dropped ambient name is logged once per
+   * process (the runtime's own set mirrors the seam's dedup so a disposed and
+   * remounted runtime does not repeat lines already emitted).
+   * @param name - the dropped environment variable name (never its value).
+   */
+  private warnScrubbed(name: string): void {
+    if (this.scrubWarned.has(name)) return
+    this.scrubWarned.add(name)
+    this.ctx.logger('subprocess').warn(
+      `ambient environment variable ${JSON.stringify(name)} matches the credential-shape heuristic and is NOT forwarded to children; pass it explicitly in the spawn spec's env if the child needs it`,
+    )
   }
 
   private terminateForHostExit(): void {
@@ -108,7 +128,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   ): Promise<string> {
     if (command.length === 0) throw new Error('subprocess-local: executable must be non-empty')
     signal?.throwIfAborted()
-    const environment = childEnv(env)
+    const environment = childEnv(env, (name) => { this.warnScrubbed(name) })
     const absolute = isAbsolute(command)
     if (!absolute && (command.includes('/') || (process.platform === 'win32' && command.includes('\\')))) {
       throw new Error(
@@ -144,7 +164,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
   }
 
   spawn(spec: SubprocessSpawnSpec): SubprocessHandle {
-    const handle = spawnSubprocess(spec, this.internals)
+    const handle = spawnSubprocess(spec, { ...this.internals, warnScrubbed: (name) => { this.warnScrubbed(name) } })
     this.live.add(handle)
     // Release ownership only once the whole TREE is gone, not at direct-child
     // settlement — a TERM-trapping helper that outlives the leader must stay
@@ -169,7 +189,7 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
       rows: spec.rows,
       cols: spec.cols,
       cwd: spec.cwd,
-      env: childEnv(spec.env),
+      env: childEnv(spec.env, (name) => { this.warnScrubbed(name) }),
     }
     const inspector = this.terminalInspector ?? createProcessInspector()
     const terminal = nodePty.spawn(file, [...spec.argv.slice(1)], options)

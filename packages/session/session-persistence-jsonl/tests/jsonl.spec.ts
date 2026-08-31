@@ -1657,3 +1657,66 @@ describe('JsonlSessionPersistence: edge cases', () => {
   })
 
 })
+
+describe('JsonlSessionPersistence: commitRepair staleness guard', () => {
+  let ctx: Context
+  let root: string
+  beforeEach(async () => {
+    root = await freshRoot()
+    ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+  })
+  afterEach(async () => { await ctx.fiber.dispose() })
+
+  it('refuses to truncate when the physical tail moved after the torn marker was taken (stale repair)', async () => {
+    const m = meta('stale-moved', '/proj')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const path = rawLogPath(root, '/proj', m.id)
+    // A torn tail the way the scanner reports it: partial line, no newline.
+    await appendFile(path, '{"type":"assistant/chunk","seq":8,"ti')
+
+    const stored = await (ctx.sessionPersistence as unknown as {
+      loadStored(id: SessionId): Promise<{ tornMarker?: { truncateTo: number } }>
+    }).loadStored(m.id)
+    const marker = stored.tornMarker
+    expect(marker).toBeDefined()
+
+    // A second writer appends a COMPLETE line into the torn region before
+    // commitRepair runs: the physical tail no longer starts where the
+    // marker said, so the repair must refuse rather than truncate away
+    // another writer's committed bytes.
+    await appendFile(path, '\n{"type":"turn/end","seq":9,"time":10,"data":{"turn":2,"reason":{"kind":"completed"}}}')
+
+    await expect(
+      (ctx.sessionPersistence as unknown as {
+        commitRepair(header: unknown, torn: { truncateTo: number } | undefined, closers: unknown[]): Promise<void>
+      }).commitRepair(m, marker, []),
+    ).rejects.toThrow(/repair is stale/)
+  })
+
+  it('refuses a torn-marker repair when the log is already complete (another writer repaired it)', async () => {
+    const m = meta('stale-done', '/proj')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    const path = rawLogPath(root, '/proj', m.id)
+    await appendFile(path, '{"type":"assistant/chunk","seq":8,"ti')
+
+    const stored = await (ctx.sessionPersistence as unknown as {
+      loadStored(id: SessionId): Promise<{ tornMarker?: { truncateTo: number } }>
+    }).loadStored(m.id)
+    const marker = stored.tornMarker
+    expect(marker).toBeDefined()
+
+    // Another process committed the repair: the torn bytes are gone.
+    const { truncate } = await import('node:fs/promises')
+    await truncate(path, marker!.truncateTo)
+
+    await expect(
+      (ctx.sessionPersistence as unknown as {
+        commitRepair(header: unknown, torn: { truncateTo: number } | undefined, closers: unknown[]): Promise<void>
+      }).commitRepair(m, marker, []),
+    ).rejects.toThrow(/repair is stale/)
+  })
+})
