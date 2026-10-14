@@ -15,7 +15,6 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
-import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-workspace'
 import {
   boot,
@@ -277,8 +276,8 @@ export interface RunProfileOptions {
   fromDefaultProfile?: string | undefined
   /** `--patch` overlay paths, in argv order. */
   patchFiles: readonly string[]
-  /** `--workspace` directory paths registered after the tree boots, in argv order. */
-  workspacePaths: readonly string[]
+  /** `--workspace` directory paths registered after the tree boots, in argv order; absent when the launcher passed none. */
+  workspacePaths?: readonly string[]
   /** The invocation's inner arguments, handed to the tree through `ctx.cmdlineArgs`. */
   args: readonly string[]
   /** Application-owned package runtime, scoped to plugin package operations. */
@@ -366,11 +365,16 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
       && ctx.fiber.state === FiberState.ACTIVE
       && ctx.get('loader') !== undefined) {
       try {
-        await registerBootWorkspaces(ctx, options.workspacePaths)
+        await registerBootWorkspaces(ctx, options.workspacePaths ?? [])
       } catch (error) {
+        // A signal or teardown landing mid-registration already owns process
+        // exit; rethrowing into bin.ts would double-report and skip its
+        // disposal, so leave the settled state to the interrupt path.
         if (signalShutdown.signal.aborted
           || ctx.fiber.state !== FiberState.ACTIVE
-          || ctx.get('loader') === undefined) return
+          || ctx.get('loader') === undefined) {
+          return { ctx, shutdown }
+        }
         throw error
       }
       appReady.commit()

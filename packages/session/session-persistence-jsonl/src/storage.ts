@@ -46,8 +46,8 @@ export interface JsonlHandleStorage {
   ): Promise<void>
   /** Materialize the header-only artifact for an explicitly flushed empty session. */
   persistHeader(header: SessionHeader, inheritedEventCount: SessionLogOffset): Promise<void>
-  /** Truncate a torn physical tail before the first new append lands. */
-  truncateTornTail(header: SessionHeader, truncateTo: number): Promise<void>
+  /** Truncate a torn physical tail before the first new append lands; a `snapshotBytes` mismatch refuses the repair as stale. */
+  truncateTornTail(header: SessionHeader, truncateTo: number, snapshotBytes?: number): Promise<void>
   /** Resolve the current-generation artifact path, or `undefined` when absent. */
   resolveCurrentLog(id: SessionId, signal?: AbortSignal): Promise<string | undefined>
   /** Read and validate the stored log at `path`, including its established event aliasing state. */
