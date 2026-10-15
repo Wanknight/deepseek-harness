@@ -642,6 +642,9 @@ importers:
       '@deepseek-ai/dsh-webhook-github':
         specifier: workspace:*
         version: link:../../packages/experimental/webhook-github
+      '@deepseek-ai/dsh-workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace/workspace
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
